@@ -1585,6 +1585,8 @@ impl Game<'_> {
                     || !self.portal_tickets_in(*d).is_empty()
                     // So does a viewed `Ticking` area (arismoko/horizon#3716), for its chunks only.
                     || self.viewed_level(*d) == Some(true)
+                    // A reset's spawn search runs in the Overworld's turn, whoever else is playing.
+                    || (self.world_spawn_pending && *d == Dim::Overworld)
             })
             .collect();
         if dims.is_empty() {

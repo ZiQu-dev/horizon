@@ -187,6 +187,8 @@ impl Game<'_> {
         ));
         self.streaming.extra.clear();
         self.world_spawn_pending = false;
+        // Players already placed hold the spawn from before the reset.
+        self.lan_broadcast_world_spawn();
         Ok(())
     }
     /// MinecraftServer.setInitialSpawn's bonus chest: BonusChestFeature.place
