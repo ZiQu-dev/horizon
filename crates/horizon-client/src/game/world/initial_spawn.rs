@@ -141,8 +141,8 @@ impl Game<'_> {
                     // getChunk(FULL) of the tested chunk alone: its 3x3 is decorated.
                     if !self.world.chunks.contains_key(&(cx, cz)) {
                         let area = [((cx, cz), -1)];
-                        if self.streaming.extra != area {
-                            self.streaming.extra = area.to_vec();
+                        if !self.streaming.extra.contains(&area[0]) {
+                            self.streaming.extra.push(area[0]);
                             self.streaming.rank_full_task(cx, cz);
                         }
                         return Ok(None);
@@ -158,6 +158,16 @@ impl Game<'_> {
             self.spawn_spiral.advance();
         }
         Ok(Some([ox * 16 + 8, height, oz * 16 + 8]))
+    }
+    /// The chunk `find_world_spawn` waits for while a reset's spawn search runs, as an area to keep loading: the
+    /// search walks outward from the origin and the players' own chunks do not reach it.
+    pub(super) fn world_spawn_search_area(&self) -> Option<((i32, i32), i32)> {
+        if !self.world_spawn_pending || self.dim != super::Dim::Overworld {
+            return None;
+        }
+        let ((ox, oz), _) = self.spawn_origin?;
+        let (dx, dz) = self.spawn_spiral.current()?;
+        Some(((ox + dx, oz + dz), -1))
     }
     /// The world spawn a reset of the vanilla levels cleared, found again once the Overworld's chunks around the
     /// search origin are there: the Overworld's turn in the server tick calls this until it has the spawn.
