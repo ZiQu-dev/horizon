@@ -8,7 +8,7 @@
 //! the next time somebody enters them.
 use super::{Dim, Game};
 use mod_api::LevelResetError;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The levels every world has, which a reset regenerates.
 const VANILLA: [Dim; 3] = [Dim::Overworld, Dim::Nether, Dim::End];
@@ -90,6 +90,8 @@ impl Game<'_> {
             .holding_level_of(owner)
             .and_then(|id| Dim::extra(&id))
             .ok_or("the mod has no runtime level open")?;
+        // Every refusal that can be known now comes before the first change: a link under any level's terrain.
+        check_terrain(&self.world_root)?;
         // The seed is written first: when it cannot be, nothing has been dropped and nothing has changed.
         horizon_client::save::write_world_seed(&self.world_root, seed)?;
         if VANILLA.contains(&self.dim) {
@@ -162,43 +164,74 @@ impl Game<'_> {
     }
 }
 
-/// Remove the terrain of the vanilla level `id`: its region, entity and POI folders, the data files that belong to it
-/// and its structure references. Nothing that is not the level's own: a link inside is refused.
-fn erase_terrain(root: &Path, id: &str) -> std::io::Result<()> {
+/// One path of a level's terrain: what to check for links, up to which folder, and how to remove it.
+struct Target {
+    path: PathBuf,
+    base: PathBuf,
+    whole_folder: bool,
+    directory: bool,
+}
+
+/// Every path a reset removes for the vanilla level `id`: its region, entity and POI folders, the data files that
+/// belong to it and its structure references.
+fn terrain_targets(root: &Path, id: &str) -> std::io::Result<Vec<Target>> {
     let dimensions = root.join("dimensions");
     let folder = horizon_client::save::dimension_dir(root, id);
     if folder == dimensions || !folder.starts_with(&dimensions) {
         return Err(std::io::Error::other("not a level folder"));
     }
-    let mut first = Ok(());
-    // Nothing is removed from a path whose check failed: a link on the way would lead the removal out of the level.
-    let mut remove = |path: &Path, base: &Path, whole_folder: bool, directory: bool| {
-        if first.is_err() {
-            return;
-        }
-        let checked = super::runtime_levels::ensure_no_links(path, base, whole_folder);
-        first = super::runtime_levels::ignore_missing(checked).and_then(|()| {
-            super::runtime_levels::ignore_missing(if directory {
-                std::fs::remove_dir_all(path)
-            } else {
-                std::fs::remove_file(path)
-            })
-        });
+    let inside = |path: PathBuf, directory: bool| Target {
+        path,
+        base: dimensions.clone(),
+        whole_folder: true,
+        directory,
     };
-    for sub in TERRAIN_FOLDERS {
-        remove(&folder.join(sub), &dimensions, true, true);
+    let mut targets: Vec<Target> = TERRAIN_FOLDERS
+        .iter()
+        .map(|sub| inside(folder.join(sub), true))
+        .collect();
+    targets.extend(TERRAIN_DATA.iter().map(|file| inside(folder.join(file), false)));
+    targets.push(Target {
+        path: super::world_loading::structure_references_file(root, id),
+        base: root.join("data"),
+        whole_folder: false,
+        directory: false,
+    });
+    Ok(targets)
+}
+
+/// The refusals that can be known before anything changes: a link on the way to any path the reset would remove, in
+/// any of the three levels. A reset that passes this can still fail on the disk, but never on a link.
+fn check_terrain(root: &Path) -> std::io::Result<()> {
+    for dim in VANILLA {
+        for target in terrain_targets(root, dim.id())? {
+            let checked =
+                super::runtime_levels::ensure_no_links(&target.path, &target.base, target.whole_folder);
+            super::runtime_levels::ignore_missing(checked)?;
+        }
     }
-    for file in TERRAIN_DATA {
-        remove(&folder.join(file), &dimensions, true, false);
+    Ok(())
+}
+
+/// Remove the terrain of the vanilla level `id`. Nothing that is not the level's own: a link on the way is refused,
+/// and nothing is removed from a path whose check failed.
+fn erase_terrain(root: &Path, id: &str) -> std::io::Result<()> {
+    for target in terrain_targets(root, id)? {
+        let checked =
+            super::runtime_levels::ensure_no_links(&target.path, &target.base, target.whole_folder);
+        super::runtime_levels::ignore_missing(checked)?;
+        super::runtime_levels::ignore_missing(if target.directory {
+            std::fs::remove_dir_all(&target.path)
+        } else {
+            std::fs::remove_file(&target.path)
+        })?;
     }
-    let references = super::world_loading::structure_references_file(root, id);
-    remove(&references, &root.join("data"), false, false);
-    first
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::erase_terrain;
+    use super::{check_terrain, erase_terrain};
     use std::fs;
 
     fn write(path: &std::path::Path) {
@@ -254,6 +287,10 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("dimensions/minecraft/overworld")).unwrap();
         assert!(erase_terrain(&root, "minecraft:overworld").is_err());
         assert!(outside.join("region/r.0.0.mca").exists());
+        // A link under one level refuses the whole reset up front, so no other level is erased first.
+        write(&root.join("dimensions/minecraft/the_nether/region/r.0.0.mca"));
+        assert!(check_terrain(&root).is_err());
+        assert!(root.join("dimensions/minecraft/the_nether/region/r.0.0.mca").exists());
         fs::remove_dir_all(&root).unwrap();
     }
 }
