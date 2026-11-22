@@ -159,6 +159,26 @@ impl Game<'_> {
         }
         Ok(Some([ox * 16 + 8, height, oz * 16 + 8]))
     }
+    /// The world spawn a reset of the vanilla levels cleared, found again once the Overworld's chunks around the
+    /// search origin are there: the Overworld's turn in the server tick calls this until it has the spawn.
+    pub(super) fn find_pending_world_spawn(&mut self) -> Result<()> {
+        if !self.world_spawn_pending {
+            return Ok(());
+        }
+        let Some([x, y, z]) = self.find_world_spawn()? else {
+            return Ok(());
+        };
+        self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+        self.level.world_spawn = Some([x, y, z]);
+        self.spawn = Some(horizon_core::geometry::Vec3::new(
+            f64::from(x) + 0.5,
+            f64::from(y),
+            f64::from(z) + 0.5,
+        ));
+        self.streaming.extra.clear();
+        self.world_spawn_pending = false;
+        Ok(())
+    }
     /// MinecraftServer.setInitialSpawn's bonus chest: BonusChestFeature.place
     /// in the spawn chunk, a chest with the spawn bonus loot and a torch on
     /// each side that can hold one, on the first free column of a shuffled
